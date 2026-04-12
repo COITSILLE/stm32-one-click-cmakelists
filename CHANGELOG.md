@@ -6,9 +6,9 @@
 - Initial public release of STM32 CMake Build List Manager.
 - Explorer context-menu commands for source files and folders to add/remove managed entries.
 - Command palette actions:
-	- `STM32: Rebuild USER_SOURCES/USER_HEADERS`
-	- `STM32: Clear USER_SOURCES/USER_HEADERS`
-	- `STM32: Sync CubeMX Paths To lockDirs`
+	- `STM32 CMake Build Manager: Rebuild USER_SOURCES/USER_HEADERS`
+	- `STM32 CMake Build Manager: Clear USER_SOURCES/USER_HEADERS`
+	- `STM32 CMake Build Manager: Sync CubeMX Paths To lockDirs`
 - `STM32 Build List` explorer tree view to inspect and remove managed sources/headers.
 - `stm32-cmake-build-list-manager.lockDirs` setting with support for:
 	- string entries (recursive lock rule)
