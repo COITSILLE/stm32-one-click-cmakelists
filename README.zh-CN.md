@@ -1,6 +1,6 @@
 # STM32 CMake Build List Manager（简体中文）
 
-[English README](README.md)
+[English README](https://github.com/COITSILLE/stm32-one-click-cmakelists/blob/main/README.md)
 
 通过管理 `CMakeLists.txt` 中的 `USER_SOURCES` 和 `USER_HEADERS`，从 VS Code 资源管理器快速把源文件和头文件搜索路径加入 STM32 CMake 构建，减少手动编辑成本。
 
