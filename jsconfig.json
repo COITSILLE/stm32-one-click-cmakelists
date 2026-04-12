@@ -3,6 +3,11 @@
 		"module": "Node16",
 		"target": "ES2022",
 		"checkJs": true,  /* Typecheck .js files. */
+		"types": [
+			"node",
+			"mocha",
+			"vscode"
+		],
 		"lib": [
 			"ES2022"
 		]
