@@ -1168,6 +1168,243 @@ async function activate(context) {
     }
 
     /**
+     * @param {string} value
+     * @returns {string | null}
+     */
+    function toWorkspaceRelativeInputPath(value) {
+        if (typeof value !== 'string') return null;
+
+        const trimmed = value.trim().replace(/^['"]|['"]$/g, '');
+        if (!trimmed) return null;
+
+        if (path.isAbsolute(trimmed)) {
+            const rel = path.relative(rootPath, trimmed);
+            if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+                return null;
+            }
+            return normalizeRelPath(rel);
+        }
+
+        const normalized = normalizeRelPath(trimmed);
+        if (!normalized || normalized === '.' || normalized.startsWith('../')) {
+            return null;
+        }
+
+        return normalized;
+    }
+
+    /**
+     * @param {string} relPath
+     * @returns {string}
+     */
+    function normalizeDirRelPath(relPath) {
+        const normalized = normalizeRelPath(relPath || '');
+        return normalized === '.' ? '' : normalized;
+    }
+
+    /**
+     * @param {string} text
+     * @returns {{mappings: {oldRelPath: string, newRelPath: string}[], invalidSegments: string[]}}
+     */
+    function parseRenameMappingsText(text) {
+        const segments = String(text || '')
+            .split(/[;\n]+/)
+            .map(segment => segment.trim())
+            .filter(Boolean);
+
+        /** @type {{oldRelPath: string, newRelPath: string}[]} */
+        const mappings = [];
+        /** @type {string[]} */
+        const invalidSegments = [];
+
+        for (const segment of segments) {
+            const match = segment.match(/^(.*?)\s*(?:=>|->)\s*(.*?)$/);
+            if (!match) {
+                invalidSegments.push(segment);
+                continue;
+            }
+
+            const oldRelPath = toWorkspaceRelativeInputPath(match[1]);
+            const newRelPath = toWorkspaceRelativeInputPath(match[2]);
+            if (!oldRelPath || !newRelPath) {
+                invalidSegments.push(segment);
+                continue;
+            }
+
+            mappings.push({ oldRelPath, newRelPath });
+        }
+
+        return { mappings, invalidSegments };
+    }
+
+    /**
+     * @param {{oldRelPath: string, newRelPath: string}[]} renameMappings
+     * @param {{sources: string[], headerDirs: string[]}} currentState
+        * @returns {{sources: string[], headerDirs: string[], sourceDiff: {added: string[], removed: string[]}, headerDiff: {added: string[], removed: string[]}}}
+     */
+    function buildRenameNextState(renameMappings, currentState) {
+        const currentSources = new Set(currentState.sources);
+        const currentHeaderDirs = new Set(currentState.headerDirs);
+        const nextSources = new Set(currentState.sources);
+        const nextHeaderDirs = new Set(currentState.headerDirs);
+
+        for (const mapping of renameMappings) {
+            const oldRelPath = normalizeRelPath(mapping.oldRelPath);
+            const newRelPath = normalizeRelPath(mapping.newRelPath);
+            if (!oldRelPath || !newRelPath || oldRelPath === newRelPath) {
+                continue;
+            }
+
+            const oldBaseName = path.posix.basename(oldRelPath);
+            const newBaseName = path.posix.basename(newRelPath);
+            const oldDir = normalizeDirRelPath(path.posix.dirname(oldRelPath));
+            const newDir = normalizeDirRelPath(path.posix.dirname(newRelPath));
+            const newIsSource = SOURCE_FILE_EXT_PATTERN.test(newBaseName);
+            const oldIsHeader = HEADER_FILE_EXT_PATTERN.test(oldBaseName);
+            const newIsHeader = HEADER_FILE_EXT_PATTERN.test(newBaseName);
+            const sourceWasTracked = currentSources.has(oldRelPath);
+            const headerWasTracked = oldDir ? currentHeaderDirs.has(oldDir) : false;
+
+            if (sourceWasTracked) {
+                nextSources.delete(oldRelPath);
+                if (newIsSource) {
+                    nextSources.add(newRelPath);
+                }
+            } else if (oldIsHeader && headerWasTracked && newIsSource) {
+                if (!nextSources.has(newRelPath)) {
+                    nextSources.add(newRelPath);
+                }
+            }
+
+            if (oldIsHeader && headerWasTracked) {
+                if (!hasHeaderFileInCurrentDir(path.join(rootPath, oldDir))) {
+                    nextHeaderDirs.delete(oldDir);
+                }
+            }
+
+            if (newIsHeader) {
+                const newDirAbs = path.join(rootPath, newDir);
+                if (newDir && hasHeaderFileInCurrentDir(newDirAbs) && !nextHeaderDirs.has(newDir)) {
+                    nextHeaderDirs.add(newDir);
+                }
+            }
+        }
+
+        const nextState = {
+            sources: normalizeAndSortUnique(Array.from(nextSources)),
+            headerDirs: normalizeAndSortUnique(Array.from(nextHeaderDirs))
+        };
+
+        return {
+            ...nextState,
+            sourceDiff: diffStringLists(currentState.sources, nextState.sources),
+            headerDiff: diffStringLists(currentState.headerDirs, nextState.headerDirs)
+        };
+    }
+
+    /**
+     * @param {{oldRelPath: string, newRelPath: string}[]} renameMappings
+     * @param {{showNoChangeMessage?: boolean}} [options]
+     * @returns {Promise<boolean>}
+     */
+    async function showRenamePreviewAndConfirm(renameMappings, options = {}) {
+        const currentState = readCurrentUserListsFromCMake();
+        const nextState = buildRenameNextState(renameMappings, currentState);
+        const totalChanges = nextState.sourceDiff.added.length + nextState.sourceDiff.removed.length + nextState.headerDiff.added.length + nextState.headerDiff.removed.length;
+
+        if (totalChanges === 0) {
+            if (options.showNoChangeMessage) {
+                vscode.window.showInformationMessage('Rename preview: no tracked USER_SOURCES/USER_HEADERS entries match these mappings.');
+            }
+            return false;
+        }
+
+        outputChannel.clear();
+        outputChannel.appendLine('=== Rename Preview ===');
+        outputChannel.appendLine('Mappings:');
+        for (const mapping of renameMappings) {
+            outputChannel.appendLine(`- ${mapping.oldRelPath} -> ${mapping.newRelPath}`);
+        }
+        outputChannel.appendLine('');
+        outputChannel.appendLine(`USER_SOURCES  +${nextState.sourceDiff.added.length} / -${nextState.sourceDiff.removed.length}`);
+        outputChannel.appendLine(`USER_HEADERS  +${nextState.headerDiff.added.length} / -${nextState.headerDiff.removed.length}`);
+        outputChannel.appendLine('');
+        outputChannel.appendLine(`Add sources: ${nextState.sourceDiff.added.length ? nextState.sourceDiff.added.join(', ') : '(none)'}`);
+        outputChannel.appendLine(`Remove sources: ${nextState.sourceDiff.removed.length ? nextState.sourceDiff.removed.join(', ') : '(none)'}`);
+        outputChannel.appendLine(`Add header dirs: ${nextState.headerDiff.added.length ? nextState.headerDiff.added.join(', ') : '(none)'}`);
+        outputChannel.appendLine(`Remove header dirs: ${nextState.headerDiff.removed.length ? nextState.headerDiff.removed.join(', ') : '(none)'}`);
+
+        const summary = [
+            `Will update USER_SOURCES: +${nextState.sourceDiff.added.length} / -${nextState.sourceDiff.removed.length}`,
+            `Will update USER_HEADERS: +${nextState.headerDiff.added.length} / -${nextState.headerDiff.removed.length}`
+        ].join('; ');
+        const detail = [
+            `Mappings: ${renameMappings.length}`,
+            `Sources +: ${formatPreviewItems(nextState.sourceDiff.added)}`,
+            `Sources -: ${formatPreviewItems(nextState.sourceDiff.removed)}`,
+            `Headers +: ${formatPreviewItems(nextState.headerDiff.added)}`,
+            `Headers -: ${formatPreviewItems(nextState.headerDiff.removed)}`
+        ].join('\n');
+
+        const action = await vscode.window.showInformationMessage(
+            summary,
+            {
+                detail
+            },
+            'Apply Rename Changes',
+            'View Detailed Preview'
+        );
+
+        if (action === 'View Detailed Preview') {
+            outputChannel.show(true);
+            const secondAction = await vscode.window.showInformationMessage(
+                'Apply the rename-driven CMake updates shown above?',
+                'Apply',
+                'Cancel'
+            );
+            return secondAction === 'Apply';
+        }
+
+        return action === 'Apply Rename Changes';
+    }
+
+    /**
+     * @param {{oldRelPath: string, newRelPath: string}[]} renameMappings
+     * @returns {Promise<boolean>}
+     */
+    async function applyRenameMappings(renameMappings) {
+        const currentState = readCurrentUserListsFromCMake();
+        const nextState = buildRenameNextState(renameMappings, currentState);
+        if (nextState.sourceDiff.added.length === 0 && nextState.sourceDiff.removed.length === 0 && nextState.headerDiff.added.length === 0 && nextState.headerDiff.removed.length === 0) {
+            return false;
+        }
+
+        return cmakeEditor.rewriteUserLists(cmakeListsPath, nextState.sources, nextState.headerDirs);
+    }
+
+    /**
+     * @param {{oldRelPath: string, newRelPath: string}[]} renameMappings
+     * @param {{showNoChangeMessage?: boolean}} [options]
+     * @returns {Promise<boolean>}
+     */
+    async function processRenameMappings(renameMappings, options = {}) {
+        if (!Array.isArray(renameMappings) || renameMappings.length === 0) {
+            return false;
+        }
+
+        const confirmed = await showRenamePreviewAndConfirm(renameMappings, options);
+        if (!confirmed) {
+            return false;
+        }
+
+        const changed = await applyRenameMappings(renameMappings);
+        if (changed) {
+            await configureAndRefresh();
+        }
+        return changed;
+    }
+
+    /**
      * @param {any[]} args
      * @returns {any[]}
      */
@@ -1498,6 +1735,32 @@ async function activate(context) {
         }
     });
 
+    const previewRenameMappingsCmd = vscode.commands.registerCommand('stm32-cmake-build-list-manager.previewRenameMappings', async () => {
+        const input = await vscode.window.showInputBox({
+            title: 'Preview Rename Mappings',
+            prompt: 'Paste one or more mappings as old -> new, separated by semicolons.',
+            placeHolder: 'src/old.c -> src/new.c; Core/Inc/old.h -> Core/Include/new.h',
+            ignoreFocusOut: true
+        });
+
+        if (!input) {
+            return;
+        }
+
+        const parsed = parseRenameMappingsText(input);
+        if (parsed.invalidSegments.length > 0) {
+            vscode.window.showErrorMessage(`Invalid rename mapping input: ${parsed.invalidSegments[0]}`);
+            return;
+        }
+
+        if (parsed.mappings.length === 0) {
+            vscode.window.showWarningMessage('No rename mappings were provided.');
+            return;
+        }
+
+        await processRenameMappings(parsed.mappings, { showNoChangeMessage: true });
+    });
+
     const syncCubeMxLockDirsCmd = vscode.commands.registerCommand('stm32-cmake-build-list-manager.syncCubeMxLockDirs', async () => {
         await runCubeMxLockSync({
             trigger: 'manual command',
@@ -1519,6 +1782,24 @@ async function activate(context) {
             }
         }
     });
+
+    context.subscriptions.push(vscode.workspace.onDidRenameFiles(event => {
+        const renameMappings = [];
+        for (const file of event.files || []) {
+            const oldRelPath = toWorkspaceRelativeInputPath(file.oldUri?.fsPath || '');
+            const newRelPath = toWorkspaceRelativeInputPath(file.newUri?.fsPath || '');
+            if (!oldRelPath || !newRelPath) {
+                continue;
+            }
+            renameMappings.push({ oldRelPath, newRelPath });
+        }
+
+        if (renameMappings.length === 0) {
+            return;
+        }
+
+        void processRenameMappings(renameMappings, { showNoChangeMessage: false });
+    }));
 
     treeView.onDidChangeSelection(e => {
         void updateSelectionContext(e.selection);
@@ -1574,6 +1855,7 @@ async function activate(context) {
         removeFolderSourceAndHeaderCmd,
         removeFolderRecursiveCmd,
         rebuildUserListsCmd,
+        previewRenameMappingsCmd,
         syncCubeMxLockDirsCmd,
         clearUserListsCmd
     );

@@ -6,6 +6,8 @@ Manage `USER_SOURCES` and `USER_HEADERS` in `CMakeLists.txt` from VS Code Explor
 
 Lock rules are also supported to prevent accidental changes in protected folders.
 
+Renaming managed `.c`, `.cpp`, `.h`, and `.hpp` files inside VS Code will preview and sync the matching `USER_SOURCES` / `USER_HEADERS` entries in the root `CMakeLists.txt`.
+
 ### Requirements
 
 - Workspace is an STM32CubeMX-generated CMake STM32 project.
@@ -29,6 +31,7 @@ Lock rules are also supported to prevent accidental changes in protected folders
 ### Command palette
 
 - `STM32 CMake Build Manager: Rebuild USER_SOURCES/USER_HEADERS`: Scan workspace files and rebuild both lists (with preview confirmation).
+- `STM32 CMake Build Manager: Preview Rename Mappings`: Paste old/new path pairs to preview and apply CMake list updates.
 - `STM32 CMake Build Manager: Clear USER_SOURCES/USER_HEADERS`: Clear both lists and automatically trigger CMake Configure.
 - `STM32 CMake Build Manager: Sync CubeMX Paths To lockDirs`: Update `lockDirs` from CubeMX paths.
 

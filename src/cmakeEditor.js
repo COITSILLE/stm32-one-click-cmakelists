@@ -102,6 +102,55 @@ function parseListEntry(line) {
 }
 
 /**
+ * @param {string} cmakePath
+ * @param {string[]} sources
+ * @param {string[]} headerDirs
+ * @returns {Promise<boolean>}
+ */
+async function rewriteUserLists(cmakePath, sources, headerDirs) {
+    const normalizedSources = Array.from(new Set((Array.isArray(sources) ? sources : [])
+        .map(normalizeRelPath)
+        .filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    const normalizedHeaderDirs = Array.from(new Set((Array.isArray(headerDirs) ? headerDirs : [])
+        .map(normalizeRelPath)
+        .filter(Boolean))).sort((a, b) => a.localeCompare(b));
+
+    const originalContent = readCMake(cmakePath);
+    let lines = originalContent.split(/\r?\n/);
+
+    let sourcesBlock = findUserSourcesBlock(lines);
+    if (!sourcesBlock) {
+        if (!createSetBlockWithEntries(lines, 'USER_SOURCES', 'target_sources', 'User added sources', normalizedSources)) {
+            return false;
+        }
+        sourcesBlock = findUserSourcesBlock(lines);
+    } else {
+        lines = rewriteBlockEntries(lines, sourcesBlock, normalizedSources);
+    }
+
+    let headersBlock = findUserHeadersBlock(lines);
+    if (!headersBlock) {
+        if (!createSetBlockWithEntries(lines, 'USER_HEADERS', 'target_include_directories', 'User added header directories', normalizedHeaderDirs)) {
+            return false;
+        }
+        headersBlock = findUserHeadersBlock(lines);
+    } else {
+        lines = rewriteBlockEntries(lines, headersBlock, normalizedHeaderDirs);
+    }
+
+    ensureVariableInTargetCommand(lines, 'target_sources', 'USER_SOURCES');
+    ensureVariableInTargetCommand(lines, 'target_include_directories', 'USER_HEADERS');
+
+    const nextContent = lines.join('\n');
+    if (nextContent === originalContent) {
+        return false;
+    }
+
+    writeCMake(cmakePath, nextContent);
+    return true;
+}
+
+/**
  * @param {string[]} lines
  * @param {{start: number, end: number, indent: string}|null} block
  * @returns {string[]}
@@ -579,6 +628,7 @@ module.exports = {
     removeSourceFromCMake,
     removeHeaderDirFromCMake,
     removeFolderSourceAndHeader,
+    rewriteUserLists,
     rebuildUserListsFromWorkspace,
     clearUserLists,
     findUserSourcesBlock,

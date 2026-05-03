@@ -1,5 +1,16 @@
 # Change Log
 
+## [1.1.0] - 2026-05-03
+
+### Added
+- Sync `USER_SOURCES` and `USER_HEADERS` when managed files are renamed inside VS Code.
+- Added rename preview flow for Explorer rename events.
+- Added manual `Preview Rename Mappings` command for pasting old/new path pairs.
+
+### Behavior
+- Normalizes rename paths to workspace-relative form before matching CMake entries.
+- Updates only the root `CMakeLists.txt` user lists and refreshes CMake state after applying changes.
+
 ## [1.0.1] - 2026-04-13
 
 ### Fixed
