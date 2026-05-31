@@ -1,0 +1,219 @@
+{
+  "name": "stm32-cmake-build-manager",
+  "displayName": "CMake Build List Manager",
+  "description": "Generic CMake build list manager. Manage USER_SOURCES and USER_HEADERS in a standalone CMake file, with tree view, context menu integration, and lock directory filtering.",
+  "version": "2.0.0",
+  "icon": "media/stm32-build.png",
+  "publisher": "COITSILLE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/COITSILLE/stm32-one-click-cmakelists.git"
+  },
+  "engines": {
+    "vscode": "^1.115.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:CMakeLists.txt"
+  ],
+  "main": "./extension.js",
+  "extensionDependencies": [
+    "ms-vscode.cmake-tools"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "cmake-build-list-manager.addSourceFile",
+        "title": "Add source to build"
+      },
+      {
+        "command": "cmake-build-list-manager.addFolderHeaderPath",
+        "title": "Add header path"
+      },
+      {
+        "command": "cmake-build-list-manager.addFolderSourceAndHeader",
+        "title": "Add source and header of this folder"
+      },
+      {
+        "command": "cmake-build-list-manager.addFolderRecursiveSourceAndHeader",
+        "title": "Recursively add source and header of this folder"
+      },
+      {
+        "command": "cmake-build-list-manager.removeSourceFile",
+        "title": "Remove source from build"
+      },
+      {
+        "command": "cmake-build-list-manager.removeHeaderPath",
+        "title": "Remove header search path"
+      },
+      {
+        "command": "cmake-build-list-manager.removeFolderSourceAndHeader",
+        "title": "Remove source and header of this folder"
+      },
+      {
+        "command": "cmake-build-list-manager.removeFolderRecursiveSourceAndHeader",
+        "title": "Recursively remove source and header of this folder"
+      },
+      {
+        "command": "cmake-build-list-manager.rebuildUserListsFromWorkspace",
+        "title": "CMake Build: Rebuild build list from workspace scan"
+      },
+      {
+        "command": "cmake-build-list-manager.clearUserLists",
+        "title": "CMake Build: Clear all managed sources and headers"
+      },
+      {
+        "command": "cmake-build-list-manager.buildRenameIndex",
+        "title": "CMake Build: Build rename index (MD5)"
+      },
+      {
+        "command": "cmake-build-list-manager.detectRenames",
+        "title": "CMake Build: Detect renames"
+      },
+      {
+        "command": "cmake-build-list-manager.lockPath",
+        "title": "Lock this path (exact)"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "when": "resourceScheme == file && (resourceExtname == .c || resourceExtname == .cpp)",
+          "command": "cmake-build-list-manager.addSourceFile",
+          "group": "1_cmakeBuild_add"
+        },
+        {
+          "when": "resourceScheme == file && (resourceExtname == .c || resourceExtname == .cpp)",
+          "command": "cmake-build-list-manager.removeSourceFile",
+          "group": "2_cmakeBuild_remove"
+        },
+        {
+          "when": "resourceScheme == file && explorerResourceIsFolder",
+          "command": "cmake-build-list-manager.addFolderHeaderPath",
+          "group": "1_cmakeBuild_add"
+        },
+        {
+          "when": "resourceScheme == file && explorerResourceIsFolder",
+          "command": "cmake-build-list-manager.addFolderSourceAndHeader",
+          "group": "1_cmakeBuild_add"
+        },
+        {
+          "when": "resourceScheme == file && explorerResourceIsFolder",
+          "command": "cmake-build-list-manager.addFolderRecursiveSourceAndHeader",
+          "group": "1_cmakeBuild_add"
+        },
+        {
+          "when": "resourceScheme == file && explorerResourceIsFolder",
+          "command": "cmake-build-list-manager.removeHeaderPath",
+          "group": "2_cmakeBuild_remove"
+        },
+        {
+          "when": "resourceScheme == file && explorerResourceIsFolder",
+          "command": "cmake-build-list-manager.removeFolderSourceAndHeader",
+          "group": "2_cmakeBuild_remove"
+        },
+        {
+          "when": "resourceScheme == file && explorerResourceIsFolder",
+          "command": "cmake-build-list-manager.removeFolderRecursiveSourceAndHeader",
+          "group": "2_cmakeBuild_remove"
+        },
+        {
+          "when": "resourceScheme == file",
+          "command": "cmake-build-list-manager.lockPath",
+          "group": "3_cmakeBuild_lock"
+        }
+      ],
+      "view/item/context": [
+        {
+          "when": "view == cmakeBuildView && viewItem == cmakeBuildSource",
+          "command": "cmake-build-list-manager.removeSourceFile",
+          "group": "2_cmakeBuild_remove"
+        },
+        {
+          "when": "view == cmakeBuildView && viewItem == cmakeBuildFolder",
+          "command": "cmake-build-list-manager.removeHeaderPath",
+          "group": "2_cmakeBuild_remove"
+        },
+        {
+          "when": "view == cmakeBuildView && viewItem == cmakeBuildFolder",
+          "command": "cmake-build-list-manager.removeFolderSourceAndHeader",
+          "group": "2_cmakeBuild_remove"
+        },
+        {
+          "when": "view == cmakeBuildView && viewItem == cmakeBuildFolder",
+          "command": "cmake-build-list-manager.removeFolderRecursiveSourceAndHeader",
+          "group": "2_cmakeBuild_remove"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "cmake-build-list-manager.rebuildUserListsFromWorkspace"
+        },
+        {
+          "command": "cmake-build-list-manager.clearUserLists"
+        },
+        {
+          "command": "cmake-build-list-manager.buildRenameIndex"
+        },
+        {
+          "command": "cmake-build-list-manager.detectRenames"
+        }
+      ]
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "cmakeBuildView",
+          "name": "CMake Build List",
+          "contextualTitle": "CMake Build"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CMake Build List Manager",
+      "properties": {
+        "cmakeBuildListManager.lockDirs": {
+          "type": "array",
+          "default": [],
+          "description": "Locked folder rules used by all add/remove/rebuild path filtering logic. Supports two entry formats: string (recursive user rule) or object ({ path, mode: exact|recursive, group }).",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "required": ["path"],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Workspace-relative folder path, such as Drivers/CMSIS or src."
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": ["exact", "recursive"],
+                    "default": "recursive",
+                    "description": "exact: only this folder; recursive: this folder and all descendants."
+                  },
+                  "group": {
+                    "type": "string",
+                    "default": "User",
+                    "description": "Group label for organizing rules (for example User, ThirdParty, Generated)."
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "cmakeBuildListManager.excludeDirs": {
+          "type": "array",
+          "default": [],
+          "description": "[Deprecated] Use lockDirs instead. Legacy exclude directories (treated as recursive lock rules).",
+          "deprecationMessage": "Use cmakeBuildListManager.lockDirs instead."
+        }
+      }
+    }
+  }
+}
