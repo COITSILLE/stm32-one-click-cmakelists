@@ -2,7 +2,7 @@
   "name": "stm32-cmake-build-manager",
   "displayName": "CMake Build List Manager",
   "description": "Generic CMake build list manager. Manage USER_SOURCES and USER_HEADERS in a standalone CMake file, with tree view, context menu integration, and lock directory filtering.",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "icon": "media/stm32-build.png",
   "publisher": "COITSILLE",
   "repository": {
@@ -74,7 +74,7 @@
       },
       {
         "command": "cmake-build-list-manager.lockPath",
-        "title": "Lock this path (exact)"
+        "title": "Lock this..."
       }
     ],
     "menus": {
@@ -174,6 +174,28 @@
     "configuration": {
       "title": "CMake Build List Manager",
       "properties": {
+        "cmakeBuildListManager.managedListsPath": {
+          "type": "string",
+          "default": "cmake_manager_gen/ManagedLists.cmake",
+          "description": "Workspace-relative path where the managed CMake file is generated. Changing this after the file has been created will not move the existing file — delete or rename it manually."
+        },
+        "cmakeBuildListManager.targetName": {
+          "type": "string",
+          "default": "${CMAKE_PROJECT_NAME}.elf",
+          "description": "CMake target name to attach USER_SOURCES and USER_HEADERS to. Use ${CMAKE_PROJECT_NAME}.elf for STM32CubeMX projects, or a plain target name like MyApp for custom projects."
+        },
+        "cmakeBuildListManager.watchedExtensions": {
+          "type": "array",
+          "default": ["c", "cpp", "h", "hpp"],
+          "description": "File extensions (without dot) to watch for auto-add/remove prompts. Changing this requires reloading the window.",
+          "items": { "type": "string" }
+        },
+        "cmakeBuildListManager.ignoredDirectories": {
+          "type": "array",
+          "default": [".git", ".vscode", "build", "dist", "cmake_manager_gen"],
+          "description": "Directory names to skip when scanning the workspace for source/header files.",
+          "items": { "type": "string" }
+        },
         "cmakeBuildListManager.lockDirs": {
           "type": "array",
           "default": [],

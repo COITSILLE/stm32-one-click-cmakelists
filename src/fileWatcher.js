@@ -38,10 +38,15 @@ function dirHasSourceOrHeader(absDir) {
  * @param {ReturnType<typeof import('./lockRules.js').createLockRules>} lockRules - Lock rules instance.
  * @param {() => Promise<void>} configureAndRefresh - Callback to trigger CMake reconfiguration and tree refresh.
  * @param {() => void} scheduleRefresh - Callback to schedule a tree-only refresh.
+ * @param {string[]} [watchedExtensions] - File extensions to watch (without dot), default ['c','cpp','h','hpp'].
  * @returns {vscode.Disposable[]} Array of disposables to push into extension subscriptions.
  */
-function setupFileWatchers(rootPath, managedListsPath, cmakeEditor, lockRules, configureAndRefresh, scheduleRefresh) {
-    const fileWatcher = vscode.workspace.createFileSystemWatcher('**/*.{c,cpp,h,hpp}');
+function setupFileWatchers(rootPath, managedListsPath, cmakeEditor, lockRules, configureAndRefresh, scheduleRefresh, watchedExtensions) {
+    const exts = (Array.isArray(watchedExtensions) && watchedExtensions.length > 0)
+        ? watchedExtensions.map(e => e.replace(/^\./, ''))
+        : ['c', 'cpp', 'h', 'hpp'];
+    const globPattern = `**/*.{${exts.join(',')}}`;
+    const fileWatcher = vscode.workspace.createFileSystemWatcher(globPattern);
 
     // ── File Creation ──────────────────────────────────────────
     const onCreateDisposable = fileWatcher.onDidCreate(async (uri) => {

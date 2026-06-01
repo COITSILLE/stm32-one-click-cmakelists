@@ -27,9 +27,29 @@ async function getCMakeToolsProject(rootPath) {
 /**
  * @param {any} project
  * @param {string} rootPath
+ * @param {string[]} [ignoredDirectories]
  * @returns {{sources: string[], headerDirs: string[], headerFiles: string[]}}
  */
-function collectManagedState(project, rootPath) {
+function collectManagedState(project, rootPath, ignoredDirectories) {
+    const ignoreSet = new Set(
+        (Array.isArray(ignoredDirectories) && ignoredDirectories.length > 0
+            ? ignoredDirectories
+            : ['.git', '.vscode', 'build', 'dist', 'cmake_manager_gen'])
+            .map(d => d.toLowerCase())
+    );
+
+    /**
+     * @param {string} relPath
+     * @returns {boolean}
+     */
+    function isIgnored(relPath) {
+        const parts = relPath.replace(/\\/g, '/').split('/');
+        for (const part of parts) {
+            if (ignoreSet.has(part.toLowerCase())) return true;
+        }
+        return false;
+    }
+
     const sourceSet = new Set();
     const headerSet = new Set();
     const headerFileSet = new Set();
@@ -50,6 +70,7 @@ function collectManagedState(project, rootPath) {
                         if (!relativeSource || relativeSource.startsWith('..') || path.isAbsolute(relativeSource)) {
                             continue;
                         }
+                        if (isIgnored(relativeSource)) continue;
                         if (SOURCE_FILE_EXT_PATTERN.test(absoluteSource)) {
                             sourceSet.add(normalizeRelPath(relativeSource));
                         } else if (HEADER_FILE_EXT_PATTERN.test(absoluteSource)) {
@@ -64,6 +85,7 @@ function collectManagedState(project, rootPath) {
                         if (!relativeHeaderDir || relativeHeaderDir.startsWith('..') || path.isAbsolute(relativeHeaderDir)) {
                             continue;
                         }
+                        if (isIgnored(relativeHeaderDir)) continue;
                         headerSet.add(normalizeRelPath(relativeHeaderDir));
                     }
                 }
@@ -81,9 +103,17 @@ function collectManagedState(project, rootPath) {
 /**
  * @param {string[]} headerDirs
  * @param {string} rootPath
+ * @param {string[]} [ignoredDirectories]
  * @returns {string[]}
  */
-function collectHeaderFilesFromHeaderDirs(headerDirs, rootPath) {
+function collectHeaderFilesFromHeaderDirs(headerDirs, rootPath, ignoredDirectories) {
+    const ignoreSet = new Set(
+        (Array.isArray(ignoredDirectories) && ignoredDirectories.length > 0
+            ? ignoredDirectories
+            : ['.git', '.vscode', 'build', 'dist', 'cmake_manager_gen'])
+            .map(d => d.toLowerCase())
+    );
+
     const result = new Set();
 
     for (const relDir of headerDirs) {
@@ -116,6 +146,7 @@ function collectHeaderFilesFromHeaderDirs(headerDirs, rootPath) {
             for (const entry of entries) {
                 const fullPath = path.join(current, entry.name);
                 if (entry.isDirectory()) {
+                    if (ignoreSet.has(entry.name.toLowerCase())) continue;
                     stack.push(fullPath);
                     continue;
                 }
@@ -138,9 +169,17 @@ function collectHeaderFilesFromHeaderDirs(headerDirs, rootPath) {
 /**
  * @param {string} absDir
  * @param {string} relDir
+ * @param {string[]} [ignoredDirectories]
  * @returns {string[]}
  */
-function collectHeaderDirsWithHeaders(absDir, relDir) {
+function collectHeaderDirsWithHeaders(absDir, relDir, ignoredDirectories) {
+    const ignoreSet = new Set(
+        (Array.isArray(ignoredDirectories) && ignoredDirectories.length > 0
+            ? ignoredDirectories
+            : ['.git', '.vscode', 'build', 'dist', 'cmake_manager_gen'])
+            .map(d => d.toLowerCase())
+    );
+
     /** @type {string[]} */
     const result = [];
 
@@ -157,9 +196,10 @@ function collectHeaderDirsWithHeaders(absDir, relDir) {
 
     for (const entry of entries) {
         if (!entry.isDirectory()) continue;
+        if (ignoreSet.has(entry.name.toLowerCase())) continue;
         const subAbs = path.join(absDir, entry.name);
         const subRel = path.join(relDir, entry.name).replace(/\\/g, '/');
-        result.push(...collectHeaderDirsWithHeaders(subAbs, subRel));
+        result.push(...collectHeaderDirsWithHeaders(subAbs, subRel, ignoredDirectories));
     }
 
     return result;
@@ -170,9 +210,17 @@ function collectHeaderDirsWithHeaders(absDir, relDir) {
  * @param {string} rootPath
  * @param {(relPath: string) => boolean} isLockedSourceFn
  * @param {(relPath: string) => boolean} isLockedFolderFn
+ * @param {string[]} [ignoredDirectories] - directory names to skip (falls back to built-in default)
  * @returns {Promise<{sources: string[], headerDirs: string[]}>}
  */
-async function scanWorkspaceForRebuild(rootPath, isLockedSourceFn, isLockedFolderFn) {
+async function scanWorkspaceForRebuild(rootPath, isLockedSourceFn, isLockedFolderFn, ignoredDirectories) {
+    const ignoreSet = new Set(
+        (Array.isArray(ignoredDirectories) && ignoredDirectories.length > 0
+            ? ignoredDirectories
+            : ['.git', '.vscode', 'build', 'dist', 'cmake_manager_gen'])
+            .map(d => d.toLowerCase())
+    );
+
     /** @type {Set<string>} */
     const sourceSet = new Set();
     /** @type {Set<string>} */
@@ -183,7 +231,7 @@ async function scanWorkspaceForRebuild(rootPath, isLockedSourceFn, isLockedFolde
      * @returns {boolean}
      */
     function shouldSkipScanDir(dirName) {
-        return REBUILD_SCAN_IGNORED_DIR_NAMES.has(dirName.toLowerCase());
+        return ignoreSet.has(dirName.toLowerCase());
     }
 
     /**

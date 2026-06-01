@@ -119,53 +119,6 @@ function getBlockEntries(lines, block) {
 
 /**
  * @param {string[]} lines
- * @param {string} commandName
- * @param {string} variableName
- * @returns {boolean}
- */
-function ensureVariableInTargetCommand(lines, commandName, variableName) {
-    const commandPattern = new RegExp(`^\\s*${commandName}\\s*\\(\\s*\\$\\{CMAKE_PROJECT_NAME\\}\\s+PRIVATE\\b`);
-    let commandStart = -1;
-
-    for (let i = 0; i < lines.length; i++) {
-        if (commandPattern.test(lines[i])) {
-            commandStart = i;
-            break;
-        }
-    }
-
-    if (commandStart === -1) return false;
-
-    let parenCount = 0;
-    let commandEnd = -1;
-    for (let i = commandStart; i < lines.length; i++) {
-        for (const ch of lines[i]) {
-            if (ch === '(') parenCount++;
-            if (ch === ')') parenCount--;
-        }
-        if (parenCount === 0) {
-            commandEnd = i;
-            break;
-        }
-    }
-
-    if (commandEnd === -1) return false;
-
-    const varRef = '${' + variableName + '}';
-    for (let i = commandStart; i <= commandEnd; i++) {
-        if (lines[i].includes(varRef)) {
-            return false;
-        }
-    }
-
-    const indentMatch = lines[commandStart].match(/^(\s*)/);
-    const baseIndent = indentMatch ? indentMatch[1] : '';
-    lines.splice(commandEnd, 0, `${baseIndent}    ${varRef}`);
-    return true;
-}
-
-/**
- * @param {string[]} lines
  * @param {string} variableName
  * @param {string} commentText
  * @param {string} entry
@@ -584,7 +537,6 @@ module.exports = {
     findUserHeadersBlock,
     parseListEntry,
     getBlockEntries,
-    ensureVariableInTargetCommand,
     createSetBlock,
     createSetBlockWithEntries,
     rewriteBlockEntries,

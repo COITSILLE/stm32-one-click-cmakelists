@@ -9,8 +9,29 @@ const { getCMakeToolsProject, collectManagedState, collectHeaderFilesFromHeaderD
 const { buildRenameIndex, detectRenames, previewAndApplyMappings } = require('./src/renames.js');
 const { setupFileWatchers } = require('./src/fileWatcher.js');
 
-const MANAGED_LISTS_REL_PATH = 'cmake_manager_gen/ManagedLists.cmake';
 const SETTINGS_PREFIX = 'cmakeBuildListManager';
+
+/**
+ * Read all user-facing configuration values, falling back to defaults.
+ * @param {vscode.Uri} workspaceFolderUri
+ * @returns {{
+ *   managedListsRelPath: string,
+ *   targetName: string,
+ *   watchedExtensions: string[],
+ *   ignoredDirectories: string[]
+ * }}
+ */
+function readConfig(workspaceFolderUri) {
+    const config = vscode.workspace.getConfiguration(SETTINGS_PREFIX, workspaceFolderUri);
+    return {
+        managedListsRelPath: String(config.get('managedListsPath', 'cmake_manager_gen/ManagedLists.cmake') || 'cmake_manager_gen/ManagedLists.cmake'),
+        targetName: String(config.get('targetName', '${CMAKE_PROJECT_NAME}.elf') || '${CMAKE_PROJECT_NAME}.elf'),
+        watchedExtensions: (Array.isArray(config.get('watchedExtensions')) ? config.get('watchedExtensions') : ['c', 'cpp', 'h', 'hpp'])
+            .map(String).filter(Boolean),
+        ignoredDirectories: (Array.isArray(config.get('ignoredDirectories')) ? config.get('ignoredDirectories') : ['.git', '.vscode', 'build', 'dist', 'cmake_manager_gen'])
+            .map(String).filter(Boolean)
+    };
+}
 
 /**
  * @param {import('vscode').ExtensionContext} context
@@ -30,7 +51,9 @@ async function activate(context) {
         return;
     }
 
-    const managedListsPath = path.join(rootPath, MANAGED_LISTS_REL_PATH);
+    const cfg = readConfig(workspaceFolderUri);
+    const managedListsRelPath = cfg.managedListsRelPath;
+    const managedListsPath = path.join(rootPath, managedListsRelPath);
     const managedListsDir = path.dirname(managedListsPath);
     const lockRules = createLockRules(SETTINGS_PREFIX, workspaceFolderUri, vscode);
 
@@ -42,7 +65,7 @@ async function activate(context) {
     function isManagedFileIncluded() {
         try {
             const rootContent = fs.readFileSync(cmakeListsPath, 'utf8');
-            const escaped = MANAGED_LISTS_REL_PATH.replace(/\\/g, '/');
+            const escaped = managedListsRelPath.replace(/\\/g, '/');
             return rootContent.includes(escaped);
         } catch {
             return false;
@@ -54,6 +77,7 @@ async function activate(context) {
             fs.mkdirSync(managedListsDir, { recursive: true });
         }
         if (!fs.existsSync(managedListsPath)) {
+            const includePath = managedListsRelPath.replace(/\\/g, '/');
             const initialContent = [
                 '# =============================================================================',
                 '#  User-managed CMake entries for additional sources and include paths.',
@@ -64,7 +88,7 @@ async function activate(context) {
                 '#  To use this file, add the following line to your root CMakeLists.txt',
                 '#  (preferably near the end, before any add_subdirectory calls):',
                 '#',
-                '#      include(cmake_manager_gen/ManagedLists.cmake)',
+                `#      include(${includePath})`,
                 '#',
                 '#  The extension will also prompt you to add this line automatically.',
                 '# =============================================================================',
@@ -81,13 +105,13 @@ async function activate(context) {
                 '    # Example: Core/Inc',
                 ')',
                 '',
-                '# The variables above are applied to the ${CMAKE_PROJECT_NAME}.elf target.',
-                'if(TARGET ${CMAKE_PROJECT_NAME}.elf)',
-                '    target_sources(${CMAKE_PROJECT_NAME}.elf PRIVATE',
+                `# The variables above are applied to the "${cfg.targetName}" target.`,
+                `if(TARGET ${cfg.targetName})`,
+                `    target_sources(${cfg.targetName} PRIVATE`,
                 '        ${USER_SOURCES}',
                 '    )',
                 '',
-                '    target_include_directories(${CMAKE_PROJECT_NAME}.elf PRIVATE',
+                `    target_include_directories(${cfg.targetName} PRIVATE`,
                 '        ${USER_HEADERS}',
                 '    )',
                 'endif()'
@@ -107,7 +131,7 @@ async function activate(context) {
             await context.globalState.update(HAS_PROMPTED_INCLUDE_KEY, true);
             return;
         }
-        const includeLine = `include(${MANAGED_LISTS_REL_PATH.replace(/\\/g, '/')})`;
+        const includeLine = `include(${managedListsRelPath.replace(/\\/g, '/')})`;
         const action = await vscode.window.showInformationMessage(
             `Add the following line to your root CMakeLists.txt to include the managed build list:\n\n\`${includeLine}\``,
             'Open CMakeLists.txt', 'Copy to Clipboard', 'Got it'
@@ -215,8 +239,8 @@ async function activate(context) {
         const project = await getCMakeToolsProject(rootPath);
         try {
             lockRules.getEffectiveLockRules();
-            const state = collectManagedState(project, rootPath);
-            const scannedHeaderFiles = collectHeaderFilesFromHeaderDirs(state.headerDirs, rootPath);
+            const state = collectManagedState(project, rootPath, cfg.ignoredDirectories);
+            const scannedHeaderFiles = collectHeaderFilesFromHeaderDirs(state.headerDirs, rootPath, cfg.ignoredDirectories);
             const mergedHeaderFiles = Array.from(new Set([...state.headerFiles, ...scannedHeaderFiles]));
             const lockedFoldersForTree = lockRules.collectLockedFoldersForTree(
                 state.sources, state.headerDirs, mergedHeaderFiles, lockRules.isLockedFolder);
@@ -384,7 +408,7 @@ async function activate(context) {
                 changed = changed || updated;
             }
 
-            const headerDirs = collectHeaderDirsWithHeaders(folderFsPath, relFolder);
+            const headerDirs = collectHeaderDirsWithHeaders(folderFsPath, relFolder, cfg.ignoredDirectories);
             for (const dir of headerDirs) {
                 if (lockRules.isLockedFolder(dir)) { blocked.push(dir); continue; }
                 const updated = await cmakeEditor.addHeaderDirToCMake(managedListsPath, dir);
@@ -452,7 +476,7 @@ async function activate(context) {
             if (lockRules.isLockedFolder(relFolder)) { blocked.push(relFolder); continue; }
             if (relFolder === '') { vscode.window.showWarningMessage('Cannot recursively remove root folder.'); continue; }
             const folderFsPath = path.join(rootPath, relFolder);
-            const headerDirsToRemove = fs.existsSync(folderFsPath) ? collectHeaderDirsWithHeaders(folderFsPath, relFolder) : [];
+            const headerDirsToRemove = fs.existsSync(folderFsPath) ? collectHeaderDirsWithHeaders(folderFsPath, relFolder, cfg.ignoredDirectories) : [];
             const updated = await cmakeEditor.removeFolderSourceAndHeader(managedListsPath, relFolder, true, headerDirsToRemove);
             changed = changed || updated;
         }
@@ -464,7 +488,7 @@ async function activate(context) {
         // Re-create the managed file if it was deleted (e.g. entire cmake_manager_gen folder removed)
         ensureManagedCMake();
 
-        const scanned = await scanWorkspaceForRebuild(rootPath, lockRules.isLockedSource, lockRules.isLockedFolder);
+        const scanned = await scanWorkspaceForRebuild(rootPath, lockRules.isLockedSource, lockRules.isLockedFolder, cfg.ignoredDirectories);
         const nextState = { sources: normalizeAndSortUnique(scanned.sources), headerDirs: normalizeAndSortUnique(scanned.headerDirs) };
         let currentState;
         try {
@@ -496,9 +520,6 @@ async function activate(context) {
         let relPath = normalizeRelPath(path.relative(rootPath, absPath));
         if (!relPath || relPath.startsWith('..')) return;
 
-        // Determine the lock target:
-        // - For a file: lock the file itself (exact mode)
-        // - For a folder: lock the folder itself (exact mode)
         let isDir = false;
         try {
             isDir = fs.statSync(absPath).isDirectory();
@@ -506,54 +527,63 @@ async function activate(context) {
             return;
         }
 
-        const lockTarget = relPath;
-        if (!lockTarget) {
-            vscode.window.showWarningMessage('Cannot lock the workspace root.');
-            return;
-        }
-
-        // Read current lock config
+        // Check if already locked (before showing QuickPick for folders)
         const config = vscode.workspace.getConfiguration(SETTINGS_PREFIX, workspaceFolderUri);
         /** @type {any[]} */
         const currentLockDirs = config.get('lockDirs', []);
         const entries = Array.isArray(currentLockDirs) ? currentLockDirs : [];
 
-        // Check if already locked
         const alreadyLocked = entries.some(entry => {
-            if (typeof entry === 'string') return normalizeRelPath(entry) === lockTarget;
+            if (typeof entry === 'string') return normalizeRelPath(entry) === relPath;
             if (entry && typeof entry === 'object' && typeof entry.path === 'string') {
-                return normalizeRelPath(entry.path) === lockTarget;
+                return normalizeRelPath(entry.path) === relPath;
             }
             return false;
         });
 
         if (alreadyLocked) {
-            vscode.window.showInformationMessage(`Path already locked: ${lockTarget}`);
+            vscode.window.showInformationMessage(`Path already locked: ${relPath}`);
             return;
         }
 
-        // Add new lock entry with exact mode
-        const newEntry = { path: lockTarget, mode: 'exact' };
+        // For folders, let the user choose exact or recursive mode
+        /** @type {'exact' | 'recursive'} */
+        let lockMode = 'exact';
+        if (isDir) {
+            const choice = await vscode.window.showQuickPick(
+                [
+                    { label: '$(lock) Lock folder (exact)', description: 'Only this folder', detail: 'Locks files directly in this folder and the folder itself as a header path.', mode: 'exact' },
+                    { label: '$(lock) Lock folder (recursive)', description: 'This folder and all subfolders', detail: 'Locks this folder and its entire subtree recursively.', mode: 'recursive' }
+                ],
+                { placeHolder: `Choose lock mode for: ${relPath}/` }
+            );
+            if (!choice) return; // user cancelled
+            lockMode = /** @type {'exact' | 'recursive'} */ (choice.mode);
+        }
+
+        // Add new lock entry
+        const newEntry = { path: relPath, mode: lockMode };
         entries.push(newEntry);
 
         const kindLabel = isDir ? 'folder' : 'file';
+        const modeLabel = isDir ? ` (${lockMode})` : '';
         await config.update('lockDirs', entries, vscode.ConfigurationTarget.Workspace);
-        vscode.window.showInformationMessage(`Locked (exact ${kindLabel}): ${lockTarget}`);
+        vscode.window.showInformationMessage(`Locked${modeLabel} ${kindLabel}: ${relPath}`);
         scheduleRefreshTree();
     });
 
     const buildRenameIndexCmd = vscode.commands.registerCommand('cmake-build-list-manager.buildRenameIndex', async () => {
-        await buildRenameIndex(rootPath, context, outputChannel);
+        await buildRenameIndex(rootPath, context, outputChannel, cfg.ignoredDirectories);
     });
 
     const detectRenamesCmd = vscode.commands.registerCommand('cmake-build-list-manager.detectRenames', async () => {
         const oldIndex = context.workspaceState.get('renameIndex');
         if (!oldIndex) {
             const doBuild = await vscode.window.showInformationMessage('No rename index found. Build index now?', 'Build', 'Cancel');
-            if (doBuild === 'Build') await buildRenameIndex(rootPath, context, outputChannel);
+            if (doBuild === 'Build') await buildRenameIndex(rootPath, context, outputChannel, cfg.ignoredDirectories);
             else return;
         }
-        const mappings = await detectRenames(rootPath, context);
+        const mappings = await detectRenames(rootPath, context, cfg.ignoredDirectories);
         if (mappings.length === 0) {
             vscode.window.showInformationMessage('No content-hash rename matches detected.');
             return;
@@ -569,8 +599,13 @@ async function activate(context) {
     // ============================================================
     // Event subscriptions
     // ============================================================
-    context.subscriptions.push(vscode.workspace.onDidRenameFiles(async () => {
-        const mappings = await detectRenames(rootPath, context);
+    context.subscriptions.push(vscode.workspace.onDidRenameFiles(async (e) => {
+        // Only trigger rename detection if at least one renamed file is a watched source/header file
+        const watchedExtPattern = new RegExp(`\\.(${cfg.watchedExtensions.map(ext => ext.replace(/^\./, '')).join('|')})$`, 'i');
+        const hasRelevantFile = e.files.some(file => watchedExtPattern.test(file.oldUri.fsPath) || watchedExtPattern.test(file.newUri.fsPath));
+        if (!hasRelevantFile) return;
+
+        const mappings = await detectRenames(rootPath, context, cfg.ignoredDirectories);
         if (mappings.length === 0) return;
         const readManagedFn = (mp) => readCurrentManagedLists(mp, cmakeEditor, normalizeAndSortUnique);
         await previewAndApplyMappings(mappings, rootPath, managedListsPath, cmakeEditor, readManagedFn, outputChannel, configureAndRefresh);
@@ -583,9 +618,9 @@ async function activate(context) {
         context.subscriptions.push(project.onCodeModelChanged(() => { void refreshTree(); }));
     }
 
-    // File creation/deletion watchers for .c/.cpp/.h/.hpp
+    // File creation/deletion watchers (extensions from config)
     const fileWatcherDisposables = setupFileWatchers(
-        rootPath, managedListsPath, cmakeEditor, lockRules, configureAndRefresh, scheduleRefreshTree
+        rootPath, managedListsPath, cmakeEditor, lockRules, configureAndRefresh, scheduleRefreshTree, cfg.watchedExtensions
     );
     context.subscriptions.push(...fileWatcherDisposables);
 

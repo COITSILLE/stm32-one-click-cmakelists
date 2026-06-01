@@ -2,7 +2,19 @@ const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { normalizeRelPath, SOURCE_FILE_EXT_PATTERN, HEADER_FILE_EXT_PATTERN, REBUILD_SCAN_IGNORED_DIR_NAMES, hasHeaderFileInCurrentDir, normalizeAndSortUnique, diffStringLists, formatPreviewItems } = require('./utils.js');
+const { normalizeRelPath, SOURCE_FILE_EXT_PATTERN, HEADER_FILE_EXT_PATTERN, hasHeaderFileInCurrentDir, normalizeAndSortUnique, diffStringLists, formatPreviewItems } = require('./utils.js');
+
+/**
+ * Build ignore set from config or fallback to default.
+ * @param {string[]} [ignoredDirectories]
+ * @returns {Set<string>}
+ */
+function buildIgnoreSet(ignoredDirectories) {
+    const dirs = (Array.isArray(ignoredDirectories) && ignoredDirectories.length > 0)
+        ? ignoredDirectories
+        : ['.git', '.vscode', 'build', 'dist', 'cmake_manager_gen'];
+    return new Set(dirs.map(d => d.toLowerCase()));
+}
 
 /**
  * Fast file hash (MD5) using stream to avoid loading entire file into memory.
@@ -29,9 +41,11 @@ function computeFileMd5(filePath) {
  * @param {string} rootPath
  * @param {vscode.ExtensionContext} context
  * @param {vscode.OutputChannel} outputChannel
+ * @param {string[]} [ignoredDirectories]
  * @returns {Promise<void>}
  */
-async function buildRenameIndex(rootPath, context, outputChannel) {
+async function buildRenameIndex(rootPath, context, outputChannel, ignoredDirectories) {
+    const ignoreSet = buildIgnoreSet(ignoredDirectories);
     /** @type {{[rel:string]:{hash:string, mtime:number, size:number}}} */
     const files = {};
 
@@ -49,10 +63,10 @@ async function buildRenameIndex(rootPath, context, outputChannel) {
 
         for (const entry of entries) {
             const entryRel = relDir ? `${relDir}/${entry.name}` : entry.name;
-            if (REBUILD_SCAN_IGNORED_DIR_NAMES.has(entryRel.toLowerCase().split('/')[0])) continue;
+            if (ignoreSet.has(entryRel.toLowerCase().split('/')[0])) continue;
             const full = path.join(absDir, entry.name);
             if (entry.isDirectory()) {
-                if (REBUILD_SCAN_IGNORED_DIR_NAMES.has(entry.name.toLowerCase())) continue;
+                if (ignoreSet.has(entry.name.toLowerCase())) continue;
                 await walk(full, entryRel);
                 continue;
             }
@@ -105,9 +119,11 @@ async function buildRenameIndex(rootPath, context, outputChannel) {
  * Only reports mappings (old -> new) where file content MD5 matches.
  * @param {string} rootPath
  * @param {vscode.ExtensionContext} context
+ * @param {string[]} [ignoredDirectories]
  * @returns {Promise<{oldRelPath: string, newRelPath: string}[]>}
  */
-async function detectRenames(rootPath, context) {
+async function detectRenames(rootPath, context, ignoredDirectories) {
+    const ignoreSet = buildIgnoreSet(ignoredDirectories);
     const oldIndex = context.workspaceState.get('renameIndex');
     if (!oldIndex || !oldIndex.files) {
         return [];
@@ -129,10 +145,10 @@ async function detectRenames(rootPath, context) {
         }
         for (const entry of entries) {
             const entryRel = relDir ? `${relDir}/${entry.name}` : entry.name;
-            if (REBUILD_SCAN_IGNORED_DIR_NAMES.has(entryRel.toLowerCase().split('/')[0])) continue;
+            if (ignoreSet.has(entryRel.toLowerCase().split('/')[0])) continue;
             const full = path.join(absDir, entry.name);
             if (entry.isDirectory()) {
-                if (REBUILD_SCAN_IGNORED_DIR_NAMES.has(entry.name.toLowerCase())) continue;
+                if (ignoreSet.has(entry.name.toLowerCase())) continue;
                 await walkCurrent(full, entryRel);
                 continue;
             }
