@@ -1,5 +1,19 @@
 # Change Log
 
+## [2.0.2] - 2026-06-02
+
+### Fixed
+- **Directory deletion not tracked**: deleting a folder in VS Code Explorer did not reliably remove managed sources/headers under it. Added `vscode.workspace.onDidDeleteFiles` listener that cross-references deleted directory URIs with `ManagedLists.cmake` and cleans up all affected entries recursively.
+- **`build/` leakage — code model path**: `collectManagedState`, `collectHeaderFilesFromHeaderDirs`, and `collectHeaderDirsWithHeaders` now all accept and respect `ignoredDirectories`. Previously the CMake code model could report `build/`-relative sources and include paths that bypassed the rebuild scan filter.
+- **`build/` leakage — file watcher path**: `FileSystemWatcher.onDidCreate` and `onDidDelete` now check `ignoredDirectories` before prompting or auto-removing. CMake reconfiguration no longer triggers "New source file: build/…" popups for generated build artifacts.
+- **Folder rename not updating managed lists**: `onDidRenameFiles` now uses a simple prefix-replacement strategy. Renaming a file or folder instantly rewrites all matching managed source and header paths — no index, no hash, single unified pass.
+
+### Changed
+- **Lock folder UX**: right-clicking a folder now shows a QuickPick with `Lock folder (exact)` and `Lock folder (recursive)` instead of silently defaulting to exact mode.
+
+### Removed
+- **MD5 content-hash rename detection**: the `buildRenameIndex` and `detectRenames` commands, `src/renames.js`, and the `outputChannel` have been removed. Folder/file renames are now handled exclusively by the prefix-replacement path in `onDidRenameFiles`, which works without any pre-built index.
+
 ## [2.0.1] - 2026-06-01
 
 ### Fixed

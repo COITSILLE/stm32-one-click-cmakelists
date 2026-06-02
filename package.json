@@ -65,14 +65,6 @@
         "title": "CMake Build: Clear all managed sources and headers"
       },
       {
-        "command": "cmake-build-list-manager.buildRenameIndex",
-        "title": "CMake Build: Build rename index (MD5)"
-      },
-      {
-        "command": "cmake-build-list-manager.detectRenames",
-        "title": "CMake Build: Detect renames"
-      },
-      {
         "command": "cmake-build-list-manager.lockPath",
         "title": "Lock this..."
       }
@@ -153,12 +145,6 @@
         },
         {
           "command": "cmake-build-list-manager.clearUserLists"
-        },
-        {
-          "command": "cmake-build-list-manager.buildRenameIndex"
-        },
-        {
-          "command": "cmake-build-list-manager.detectRenames"
         }
       ]
     },

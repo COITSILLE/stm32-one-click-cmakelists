@@ -6,7 +6,6 @@ const TreeViewProvider = require('./src/treeViewProvider.js');
 const { normalizeRelPath, flattenArgs, normalizeAndSortUnique, diffStringLists, formatPreviewItems, SOURCE_FILE_EXT_PATTERN } = require('./src/utils.js');
 const { createLockRules } = require('./src/lockRules.js');
 const { getCMakeToolsProject, collectManagedState, collectHeaderFilesFromHeaderDirs, collectHeaderDirsWithHeaders, scanWorkspaceForRebuild, readCurrentManagedLists } = require('./src/cmakeTools.js');
-const { buildRenameIndex, detectRenames, previewAndApplyMappings } = require('./src/renames.js');
 const { setupFileWatchers } = require('./src/fileWatcher.js');
 
 const SETTINGS_PREFIX = 'cmakeBuildListManager';
@@ -147,14 +146,13 @@ async function activate(context) {
     }
 
     // ============================================================
-    // Tree view & output channel
+    // Tree view
     // ============================================================
     const treeViewProvider = new TreeViewProvider(rootPath);
     const treeView = vscode.window.createTreeView('cmakeBuildView', {
         treeDataProvider: treeViewProvider,
         canSelectMany: true
     });
-    const outputChannel = vscode.window.createOutputChannel('CMake Build List Manager');
 
     let refreshRunning = false;
     let refreshPending = false;
@@ -572,71 +570,40 @@ async function activate(context) {
         scheduleRefreshTree();
     });
 
-    const buildRenameIndexCmd = vscode.commands.registerCommand('cmake-build-list-manager.buildRenameIndex', async () => {
-        await buildRenameIndex(rootPath, context, outputChannel, cfg.ignoredDirectories);
-    });
-
-    const detectRenamesCmd = vscode.commands.registerCommand('cmake-build-list-manager.detectRenames', async () => {
-        const oldIndex = context.workspaceState.get('renameIndex');
-        if (!oldIndex) {
-            const doBuild = await vscode.window.showInformationMessage('No rename index found. Build index now?', 'Build', 'Cancel');
-            if (doBuild === 'Build') await buildRenameIndex(rootPath, context, outputChannel, cfg.ignoredDirectories);
-            else return;
-        }
-        const mappings = await detectRenames(rootPath, context, cfg.ignoredDirectories);
-        if (mappings.length === 0) {
-            vscode.window.showInformationMessage('No content-hash rename matches detected.');
-            return;
-        }
-        outputChannel.clear();
-        outputChannel.appendLine('=== Rename Detection ===');
-        for (const m of mappings) outputChannel.appendLine(`${m.oldRelPath}  ->  ${m.newRelPath}`);
-        outputChannel.show(true);
-        const readManagedFn = (mp) => readCurrentManagedLists(mp, cmakeEditor, normalizeAndSortUnique);
-        await previewAndApplyMappings(mappings, rootPath, managedListsPath, cmakeEditor, readManagedFn, outputChannel, configureAndRefresh);
-    });
-
     // ============================================================
     // Event subscriptions
     // ============================================================
     context.subscriptions.push(vscode.workspace.onDidRenameFiles(async (e) => {
-        // ── Fast path: folder rename → prefix-replace managed entries (no index needed) ──
+        // Prefix-based rename: matches managed source / header path exactly or by directory prefix.
+        // No index or content hash needed — works for files, folders, and recursive subtrees.
+        const current = readCurrentManagedLists(managedListsPath, cmakeEditor, normalizeAndSortUnique);
+        let updatedSources = [...current.sources];
+        let updatedHeaders = [...current.headerDirs];
+
         for (const file of e.files) {
             const oldRel = normalizeRelPath(path.relative(rootPath, file.oldUri.fsPath));
             const newRel = normalizeRelPath(path.relative(rootPath, file.newUri.fsPath));
             if (!oldRel || !newRel || oldRel === newRel) continue;
 
-            const current = readCurrentManagedLists(managedListsPath, cmakeEditor, normalizeAndSortUnique);
             const oldPrefix = oldRel + '/';
-            let matched = false;
 
-            const updatedSources = current.sources.map(s => {
-                if (s === oldRel) { matched = true; return newRel; }
-                if (s.startsWith(oldPrefix)) { matched = true; return newRel + '/' + s.slice(oldPrefix.length); }
+            updatedSources = updatedSources.map(s => {
+                if (s === oldRel) return newRel;
+                if (s.startsWith(oldPrefix)) return newRel + '/' + s.slice(oldPrefix.length);
                 return s;
             });
-            const updatedHeaders = current.headerDirs.map(h => {
-                if (h === oldRel) { matched = true; return newRel; }
-                if (h.startsWith(oldPrefix)) { matched = true; return newRel + '/' + h.slice(oldPrefix.length); }
+            updatedHeaders = updatedHeaders.map(h => {
+                if (h === oldRel) return newRel;
+                if (h.startsWith(oldPrefix)) return newRel + '/' + h.slice(oldPrefix.length);
                 return h;
             });
-
-            if (matched) {
-                await cmakeEditor.rewriteUserLists(managedListsPath, updatedSources, updatedHeaders);
-                await configureAndRefresh();
-                return; // one folder rename per operation
-            }
         }
 
-        // ── Fallback: MD5 content-hash rename detection (handles individual file renames) ──
-        const watchedExtPattern = new RegExp(`\\.(${cfg.watchedExtensions.map(ext => ext.replace(/^\\./, '')).join('|')})$`, 'i');
-        const hasRelevantFile = e.files.some(file => watchedExtPattern.test(file.oldUri.fsPath) || watchedExtPattern.test(file.newUri.fsPath));
-        if (!hasRelevantFile) return;
-
-        const mappings = await detectRenames(rootPath, context, cfg.ignoredDirectories);
-        if (mappings.length === 0) return;
-        const readManagedFn = (mp) => readCurrentManagedLists(mp, cmakeEditor, normalizeAndSortUnique);
-        await previewAndApplyMappings(mappings, rootPath, managedListsPath, cmakeEditor, readManagedFn, outputChannel, configureAndRefresh);
+        if (JSON.stringify(updatedSources) !== JSON.stringify(current.sources) ||
+            JSON.stringify(updatedHeaders) !== JSON.stringify(current.headerDirs)) {
+            await cmakeEditor.rewriteUserLists(managedListsPath, updatedSources, updatedHeaders);
+            await configureAndRefresh();
+        }
     }));
 
     treeView.onDidChangeSelection(e => { void updateSelectionContext(e.selection); });
@@ -661,10 +628,10 @@ async function activate(context) {
     await refreshTree();
 
     context.subscriptions.push(
-        outputChannel, treeView,
+        treeView,
         addSourceFileCmd, addFolderHeaderPathCmd, addFolderSourceAndHeaderCmd, addFolderRecursiveCmd,
         removeSourceFileCmd, removeHeaderPathCmd, removeFolderSourceAndHeaderCmd, removeFolderRecursiveCmd,
-        rebuildUserListsCmd, buildRenameIndexCmd, detectRenamesCmd, clearUserListsCmd, lockPathCmd
+        rebuildUserListsCmd, clearUserListsCmd, lockPathCmd
     );
 
     void promptIncludeLine();
