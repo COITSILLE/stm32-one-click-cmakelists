@@ -600,8 +600,36 @@ async function activate(context) {
     // Event subscriptions
     // ============================================================
     context.subscriptions.push(vscode.workspace.onDidRenameFiles(async (e) => {
-        // Only trigger rename detection if at least one renamed file is a watched source/header file
-        const watchedExtPattern = new RegExp(`\\.(${cfg.watchedExtensions.map(ext => ext.replace(/^\./, '')).join('|')})$`, 'i');
+        // ── Fast path: folder rename → prefix-replace managed entries (no index needed) ──
+        for (const file of e.files) {
+            const oldRel = normalizeRelPath(path.relative(rootPath, file.oldUri.fsPath));
+            const newRel = normalizeRelPath(path.relative(rootPath, file.newUri.fsPath));
+            if (!oldRel || !newRel || oldRel === newRel) continue;
+
+            const current = readCurrentManagedLists(managedListsPath, cmakeEditor, normalizeAndSortUnique);
+            const oldPrefix = oldRel + '/';
+            let matched = false;
+
+            const updatedSources = current.sources.map(s => {
+                if (s === oldRel) { matched = true; return newRel; }
+                if (s.startsWith(oldPrefix)) { matched = true; return newRel + '/' + s.slice(oldPrefix.length); }
+                return s;
+            });
+            const updatedHeaders = current.headerDirs.map(h => {
+                if (h === oldRel) { matched = true; return newRel; }
+                if (h.startsWith(oldPrefix)) { matched = true; return newRel + '/' + h.slice(oldPrefix.length); }
+                return h;
+            });
+
+            if (matched) {
+                await cmakeEditor.rewriteUserLists(managedListsPath, updatedSources, updatedHeaders);
+                await configureAndRefresh();
+                return; // one folder rename per operation
+            }
+        }
+
+        // ── Fallback: MD5 content-hash rename detection (handles individual file renames) ──
+        const watchedExtPattern = new RegExp(`\\.(${cfg.watchedExtensions.map(ext => ext.replace(/^\\./, '')).join('|')})$`, 'i');
         const hasRelevantFile = e.files.some(file => watchedExtPattern.test(file.oldUri.fsPath) || watchedExtPattern.test(file.newUri.fsPath));
         if (!hasRelevantFile) return;
 
@@ -620,7 +648,7 @@ async function activate(context) {
 
     // File creation/deletion watchers (extensions from config)
     const fileWatcherDisposables = setupFileWatchers(
-        rootPath, managedListsPath, cmakeEditor, lockRules, configureAndRefresh, scheduleRefreshTree, cfg.watchedExtensions
+        rootPath, managedListsPath, cmakeEditor, lockRules, configureAndRefresh, scheduleRefreshTree, cfg.watchedExtensions, cfg.ignoredDirectories
     );
     context.subscriptions.push(...fileWatcherDisposables);
 

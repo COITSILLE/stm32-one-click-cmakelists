@@ -39,19 +39,39 @@ function dirHasSourceOrHeader(absDir) {
  * @param {() => Promise<void>} configureAndRefresh - Callback to trigger CMake reconfiguration and tree refresh.
  * @param {() => void} scheduleRefresh - Callback to schedule a tree-only refresh.
  * @param {string[]} [watchedExtensions] - File extensions to watch (without dot), default ['c','cpp','h','hpp'].
+ * @param {string[]} [ignoredDirectories] - Directory names to skip in create/delete events, default built-in.
  * @returns {vscode.Disposable[]} Array of disposables to push into extension subscriptions.
  */
-function setupFileWatchers(rootPath, managedListsPath, cmakeEditor, lockRules, configureAndRefresh, scheduleRefresh, watchedExtensions) {
+function setupFileWatchers(rootPath, managedListsPath, cmakeEditor, lockRules, configureAndRefresh, scheduleRefresh, watchedExtensions, ignoredDirectories) {
     const exts = (Array.isArray(watchedExtensions) && watchedExtensions.length > 0)
         ? watchedExtensions.map(e => e.replace(/^\./, ''))
         : ['c', 'cpp', 'h', 'hpp'];
     const globPattern = `**/*.{${exts.join(',')}}`;
     const fileWatcher = vscode.workspace.createFileSystemWatcher(globPattern);
 
+    const ignoreSet = new Set(
+        (Array.isArray(ignoredDirectories) && ignoredDirectories.length > 0
+            ? ignoredDirectories
+            : ['.git', '.vscode', 'build', 'dist', 'cmake_manager_gen'])
+            .map(d => d.toLowerCase())
+    );
+
+    /**
+     * @param {string} relPath
+     * @returns {boolean}
+     */
+    function isIgnoredDir(relPath) {
+        const parts = relPath.replace(/\\/g, '/').split('/');
+        for (const part of parts) {
+            if (ignoreSet.has(part.toLowerCase())) return true;
+        }
+        return false;
+    }
+
     // ── File Creation ──────────────────────────────────────────
     const onCreateDisposable = fileWatcher.onDidCreate(async (uri) => {
         const relPath = normalizeRelPath(path.relative(rootPath, uri.fsPath));
-        if (!relPath) {
+        if (!relPath || isIgnoredDir(relPath)) {
             scheduleRefresh();
             return;
         }
@@ -138,7 +158,7 @@ function setupFileWatchers(rootPath, managedListsPath, cmakeEditor, lockRules, c
     // ── File Deletion ──────────────────────────────────────────
     const onDeleteDisposable = fileWatcher.onDidDelete(async (uri) => {
         const relPath = normalizeRelPath(path.relative(rootPath, uri.fsPath));
-        if (!relPath) {
+        if (!relPath || isIgnoredDir(relPath)) {
             scheduleRefresh();
             return;
         }
@@ -183,7 +203,52 @@ function setupFileWatchers(rootPath, managedListsPath, cmakeEditor, lockRules, c
     // ── File Change (for tree refresh) ─────────────────────────
     const onChangeDisposable = fileWatcher.onDidChange(() => scheduleRefresh());
 
-    return [fileWatcher, onCreateDisposable, onDeleteDisposable, onChangeDisposable];
+    // ── Workspace File/Folder Deletion (handles directory-level batch deletes) ─
+    // FileSystemWatcher.onDidDelete may not fire for each file when a directory
+    // is deleted recursively. onDidDeleteFiles catches the directory URI and
+    // cross-references with the managed lists to clean up all affected entries.
+    const onDidDeleteFilesDisposable = vscode.workspace.onDidDeleteFiles(async (event) => {
+        let changed = false;
+
+        for (const uri of event.files) {
+            const relPath = normalizeRelPath(path.relative(rootPath, uri.fsPath));
+            if (!relPath) continue;
+
+            // Skip individual source/header files — handled by FileSystemWatcher.onDidDelete
+            const isSourceFile = SOURCE_FILE_EXT_PATTERN.test(relPath);
+            const isHeaderFile = HEADER_FILE_EXT_PATTERN.test(relPath);
+            if (isSourceFile || isHeaderFile) continue;
+
+            // Treat as a directory deletion — clean up all managed entries under this path
+            try {
+                const content = cmakeEditor.readCMake(managedListsPath);
+                const lines = content.split(/\r?\n/);
+                const sourceBlock = cmakeEditor.findUserSourcesBlock(lines);
+                const headerBlock = cmakeEditor.findUserHeadersBlock(lines);
+                const sources = cmakeEditor.getBlockEntries(lines, sourceBlock);
+                const headerDirs = cmakeEditor.getBlockEntries(lines, headerBlock);
+
+                const prefix = relPath + '/';
+                for (const src of sources) {
+                    if ((src === relPath || src.startsWith(prefix)) && !lockRules.isLockedSource(src)) {
+                        changed = await cmakeEditor.removeSourceFromCMake(managedListsPath, src) || changed;
+                    }
+                }
+                for (const hdr of headerDirs) {
+                    if ((hdr === relPath || hdr.startsWith(prefix)) && !lockRules.isLockedFolder(hdr)) {
+                        changed = await cmakeEditor.removeHeaderDirFromCMake(managedListsPath, hdr) || changed;
+                    }
+                }
+            } catch {
+                // Managed file may not exist yet; skip
+            }
+        }
+
+        if (changed) await configureAndRefresh();
+        scheduleRefresh();
+    });
+
+    return [fileWatcher, onCreateDisposable, onDeleteDisposable, onChangeDisposable, onDidDeleteFilesDisposable];
 }
 
 module.exports = { setupFileWatchers, dirHasSourceOrHeader };
